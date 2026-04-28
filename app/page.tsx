@@ -1,63 +1,316 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  getNearbyRestaurants,
+  openKakaoMapWalkingRoute,
+} from "./lib/restaurants";
+
+type Coords = { lat: number; lng: number };
+type GeoPermissionState = "granted" | "denied" | "prompt" | "unknown";
 
 export default function Home() {
+  const [coords, setCoords] = useState<Coords | null>(null);
+  const [geoError, setGeoError] = useState<string | null>(null);
+  const [isRequestingGeo, setIsRequestingGeo] = useState(false);
+  const [geoPermission, setGeoPermission] =
+    useState<GeoPermissionState>("unknown");
+  const [debugInfo, setDebugInfo] = useState<string>("");
+
+  const [page, setPage] = useState(1);
+  const [isEnd, setIsEnd] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [items, setItems] = useState<
+    Awaited<ReturnType<typeof getNearbyRestaurants>>["restaurants"]
+  >([]);
+
+  const canLoadMore = useMemo(
+    () => !!coords && !isEnd && !isLoading,
+    [coords, isEnd, isLoading],
+  );
+
+  useEffect(() => {
+    const protocol =
+      typeof window !== "undefined" ? window.location.protocol : "";
+    const secure =
+      typeof window !== "undefined" ? String(window.isSecureContext) : "unknown";
+
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+    const hasGeo = typeof navigator !== "undefined" && !!navigator.geolocation;
+    const hasPerm =
+      typeof navigator !== "undefined" && "permissions" in navigator;
+
+    setDebugInfo(
+      `protocol=${protocol} secureContext=${secure} hasGeo=${String(hasGeo)} hasPermissionsApi=${String(hasPerm)} ua=${ua}`,
+    );
+
+    // iOS Safari may not support navigator.permissions for geolocation.
+    const nav = navigator as unknown as {
+      permissions?: {
+        query?: (desc: { name: string }) => Promise<{ state: string }>;
+      };
+    };
+
+    nav.permissions
+      ?.query?.({ name: "geolocation" })
+      .then((p) => {
+        const state = p.state as GeoPermissionState;
+        setGeoPermission(state ?? "unknown");
+      })
+      .catch(() => {
+        setGeoPermission("unknown");
+      });
+  }, []);
+
+  function requestLocation() {
+    if (!navigator.geolocation) {
+      setGeoError("이 브라우저는 위치 권한을 지원하지 않습니다.");
+      return;
+    }
+
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setGeoError(
+        "iPhone/Safari에서는 HTTPS에서만 위치 권한이 동작합니다. (예: https://… 로 접속하거나, 로컬 테스트는 터널(ngrok/Cloudflare Tunnel) 사용)",
+      );
+      return;
+    }
+
+    setIsRequestingGeo(true);
+    setGeoError(null);
+
+    let finished = false;
+    let watchId: number | null = null;
+
+    const done = (next?: { coords?: Coords; error?: string }) => {
+      if (finished) return;
+      finished = true;
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      if (next?.coords) setCoords(next.coords);
+      if (next?.error) setGeoError(next.error);
+      setIsRequestingGeo(false);
+    };
+
+    // iOS Safari sometimes hangs on getCurrentPosition; we fall back to watchPosition.
+    const startWatchFallback = () => {
+      if (watchId !== null) return;
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          done({
+            coords: { lat: pos.coords.latitude, lng: pos.coords.longitude },
+          });
+        },
+        (err) => {
+          done({
+            error:
+              err.code === err.PERMISSION_DENIED
+                ? "위치 권한이 거부되었습니다. iPhone 설정 또는 Safari 사이트 설정에서 위치 권한을 허용해주세요."
+                : err.code === err.POSITION_UNAVAILABLE
+                  ? "위치 정보를 사용할 수 없습니다. (GPS/네트워크 상태 확인)"
+                  : err.code === err.TIMEOUT
+                    ? "위치 요청이 시간 초과되었습니다. 잠시 후 다시 시도해주세요."
+                    : `현재 위치를 가져오지 못했습니다. (code: ${err.code})`,
+          });
+        },
+        { enableHighAccuracy: false, maximumAge: 0, timeout: 10000 },
+      );
+    };
+
+    const watchFallbackTimer = window.setTimeout(() => {
+      startWatchFallback();
+    }, 2500);
+
+    const hangGuard = window.setTimeout(() => {
+      if (finished) return;
+      startWatchFallback();
+      window.setTimeout(() => {
+        if (!finished) {
+          done({
+            error:
+              "위치 권한 요청이 응답되지 않습니다. iPhone 설정 > 개인정보 보호 및 보안 > 위치 서비스, 그리고 Safari의 사이트 위치 권한을 확인해주세요.",
+          });
+        }
+      }, 9000);
+    }, 12_000);
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        window.clearTimeout(watchFallbackTimer);
+        window.clearTimeout(hangGuard);
+        done({ coords: { lat: pos.coords.latitude, lng: pos.coords.longitude } });
+      },
+      (err) => {
+        window.clearTimeout(watchFallbackTimer);
+        window.clearTimeout(hangGuard);
+        done({
+          error:
+            err.code === err.PERMISSION_DENIED
+              ? "위치 권한이 거부되었습니다. iPhone 설정 또는 Safari 사이트 설정에서 위치 권한을 허용해주세요."
+              : err.code === err.POSITION_UNAVAILABLE
+                ? "위치 정보를 사용할 수 없습니다. (GPS/네트워크 상태 확인)"
+                : err.code === err.TIMEOUT
+                  ? "위치 요청이 시간 초과되었습니다. 잠시 후 다시 시도해주세요."
+                  : `현재 위치를 가져오지 못했습니다. (code: ${err.code})`,
+        });
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 0 },
+    );
+  }
+
+  useEffect(() => {
+    requestLocation();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (!coords) return;
+      setIsLoading(true);
+      setGeoError(null);
+      try {
+        const result = await getNearbyRestaurants({
+          x: coords.lng,
+          y: coords.lat,
+          page: 1,
+        });
+        if (cancelled) return;
+        setItems(result.restaurants);
+        setPage(result.page);
+        setIsEnd(result.isEnd);
+      } catch (e) {
+        if (cancelled) return;
+        setGeoError(
+          e instanceof Error ? e.message : "데이터를 불러오지 못했습니다.",
+        );
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    }
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [coords]);
+
+  async function loadMore() {
+    if (!coords) return;
+    if (!canLoadMore) return;
+    setIsLoading(true);
+    try {
+      const nextPage = page + 1;
+      const result = await getNearbyRestaurants({
+        x: coords.lng,
+        y: coords.lat,
+        page: nextPage,
+      });
+      setItems((prev) => [...prev, ...result.restaurants]);
+      setPage(result.page);
+      setIsEnd(result.isEnd);
+    } catch (e) {
+      setGeoError(
+        e instanceof Error ? e.message : "더보기를 불러오지 못했습니다.",
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="flex min-h-dvh flex-col items-center bg-zinc-50 px-6 py-10 font-sans text-zinc-950 dark:bg-black dark:text-zinc-50">
+      <main className="w-full max-w-2xl">
+        <header className="mb-8">
+          <h1 className="text-2xl font-semibold tracking-tight">오늘의 식사</h1>
+          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            현재 위치 기준 반경 2km 내 맛집을 추천합니다.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        </header>
+
+        {!coords && !geoError && (
+          <div className="rounded-xl border border-zinc-200 bg-white p-4 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-300">
+            {isRequestingGeo
+              ? "위치 권한을 요청 중입니다…"
+              : "위치를 불러오는 중입니다…"}
+            <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
+              {debugInfo} permission={geoPermission}
+            </div>
+            <div className="mt-3">
+              <button
+                type="button"
+                className="inline-flex h-10 items-center justify-center rounded-full border border-zinc-200 bg-white px-4 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900/40"
+                onClick={requestLocation}
+                disabled={isRequestingGeo}
+              >
+                {isRequestingGeo ? "요청 중…" : "버튼으로 위치 요청"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {geoError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/40 dark:bg-red-950/30">
+            <div className="text-sm text-red-800 dark:text-red-200">
+              {geoError}
+            </div>
+            <div className="mt-3">
+              <button
+                type="button"
+                className="inline-flex h-10 items-center justify-center rounded-full bg-red-600 px-4 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+                onClick={requestLocation}
+                disabled={isRequestingGeo}
+              >
+                {isRequestingGeo ? "요청 중…" : "위치 권한 다시 요청"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <ul className="mt-6 space-y-3">
+          {items.map((r) => (
+            <li key={r.id}>
+              <button
+                type="button"
+                className="w-full rounded-xl border border-zinc-200 bg-white p-4 text-left transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900/40"
+                onClick={() => {
+                  if (!coords) return;
+                  openKakaoMapWalkingRoute({
+                    start: { lat: coords.lat, lng: coords.lng },
+                    end: { lat: r.y, lng: r.x },
+                  });
+                }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-base font-semibold">{r.name}</div>
+                    <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                      {r.roadAddressName || r.addressName}
+                    </div>
+                    <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                      {r.categoryName}
+                      {typeof r.distanceMeters === "number"
+                        ? ` · ${r.distanceMeters}m`
+                        : ""}
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                    도보 길찾기
+                  </span>
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <div className="mt-6 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-200 bg-white px-5 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900/40"
+            onClick={loadMore}
+            disabled={!canLoadMore}
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            {isLoading ? "불러오는 중…" : "다른 맛집 더보기"}
+          </button>
+          <div className="text-xs text-zinc-500 dark:text-zinc-500">
+            {coords ? `page ${page}${isEnd ? " (끝)" : ""}` : ""}
+          </div>
         </div>
       </main>
     </div>
