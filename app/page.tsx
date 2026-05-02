@@ -9,6 +9,13 @@ import {
 type Coords = { lat: number; lng: number };
 type GeoPermissionState = "granted" | "denied" | "prompt" | "unknown";
 
+/** 모바일에서 전화 앱을 열기 위한 tel: URI. 번호가 없으면 null. */
+function phoneNumberToTelHref(phone: string): string | null {
+  const normalized = phone.replace(/[^\d+]/g, "");
+  if (!normalized || normalized === "+") return null;
+  return `tel:${normalized}`;
+}
+
 export default function Home() {
   const [coords, setCoords] = useState<Coords | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
@@ -264,39 +271,86 @@ export default function Home() {
         )}
 
         <ul className="mt-6 space-y-3">
-          {items.map((r) => (
+          {items.map((r) => {
+            const telHref = phoneNumberToTelHref(r.phone);
+            return (
             <li key={r.id}>
-              <button
-                type="button"
-                className="w-full rounded-xl border border-zinc-200 bg-white p-4 text-left transition hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:bg-zinc-900/40"
-                onClick={() => {
-                  if (!coords) return;
-                  openKakaoMapWalkingRoute({
-                    start: { lat: coords.lat, lng: coords.lng },
-                    end: { lat: r.y, lng: r.x },
-                  });
-                }}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-base font-semibold">{r.name}</div>
-                    <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
-                      {r.roadAddressName || r.addressName}
-                    </div>
-                    <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
-                      {r.categoryName}
-                      {typeof r.distanceMeters === "number"
-                        ? ` · ${r.distanceMeters}m`
-                        : ""}
-                    </div>
-                  </div>
-                  <span className="shrink-0 rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
-                    도보 길찾기
+              <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950">
+                {/* 이미지 플레이스홀더 비활성화 (로컬 API 썸네일 미제공)
+                <div
+                  className="mr-3 flex h-24 w-24 shrink-0 flex-col items-center justify-center rounded-lg border border-dashed border-zinc-200 bg-zinc-50 text-center text-[11px] font-medium leading-snug text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900/60 dark:text-zinc-400"
+                  title="카카오 로컬 API 응답에 이미지 URL이 없음"
+                >
+                  이미지
+                  <span className="mt-0.5 block px-1 text-[10px] font-normal text-zinc-400 dark:text-zinc-500">
+                    API 미제공
                   </span>
                 </div>
-              </button>
+                */}
+                <div className="min-w-0">
+                  <div className="text-base font-semibold leading-snug">
+                    {r.name}
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+                    {r.roadAddressName || r.addressName}
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-500">
+                    {r.categoryName}
+                    {typeof r.distanceMeters === "number"
+                      ? ` · ${r.distanceMeters}m`
+                      : ""}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    <span
+                      className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-0.5 text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
+                      title="별점은 로컬 API 응답에 없음"
+                    >
+                      <span aria-hidden>★</span>
+                      <span>맵 상세에서 확인</span>
+                    </span>
+                    <span className="text-zinc-400 dark:text-zinc-500">·</span>
+                    <span title="리뷰 텍스트는 로컬 API 응답에 없음">
+                      리뷰는 맵 상세
+                    </span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="inline-flex h-9 items-center justify-center rounded-full bg-zinc-900 px-4 text-xs font-semibold text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+                      onClick={() => {
+                        if (!coords) return;
+                        openKakaoMapWalkingRoute({
+                          start: { lat: coords.lat, lng: coords.lng },
+                          end: { lat: r.y, lng: r.x },
+                        });
+                      }}
+                      disabled={!coords}
+                    >
+                      도보 길찾기
+                    </button>
+                    {telHref ? (
+                      <a
+                        href={telHref}
+                        className="inline-flex h-9 items-center justify-center rounded-full bg-emerald-600 px-4 text-xs font-semibold text-white transition hover:bg-emerald-700"
+                        aria-label={`${r.name}에 전화 걸기`}
+                      >
+                        전화하기
+                      </a>
+                    ) : null}
+                    <a
+                      href={r.placeUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex h-9 items-center justify-center rounded-full border border-zinc-200 bg-white px-4 text-xs font-semibold text-zinc-900 transition hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900/50"
+                    >
+                      맵 상세·별점·리뷰
+                    </a>
+                  </div>
+                </div>
+              </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
 
         <div className="mt-6 flex items-center justify-between gap-3">
