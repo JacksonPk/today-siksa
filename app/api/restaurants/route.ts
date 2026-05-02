@@ -1,5 +1,8 @@
 import { NextRequest } from "next/server";
 
+/** 카카오 로컬 «카테고리로 장소 검색» — 음식점 그룹 */
+const KAKAO_RESTAURANT_CATEGORY = "FD6";
+
 type KakaoCategorySearchResponse = {
   meta: {
     total_count: number;
@@ -26,6 +29,8 @@ export type NearbyRestaurant = {
   id: string;
   name: string;
   categoryName: string;
+  categoryGroupCode?: string;
+  categoryGroupName?: string;
   phone: string;
   addressName: string;
   roadAddressName: string;
@@ -53,7 +58,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const x = searchParams.get("x"); // longitude
   const y = searchParams.get("y"); // latitude
-  const page = searchParams.get("page") ?? "1";
+  const pageRaw = searchParams.get("page") ?? "1";
+  const radiusRaw = searchParams.get("radius");
 
   if (!x || !y) {
     return Response.json(
@@ -62,48 +68,76 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const kakaoUrl = new URL("https://dapi.kakao.com/v2/local/search/category.json");
-  kakaoUrl.searchParams.set("category_group_code", "FD6");
-  kakaoUrl.searchParams.set("x", x);
-  kakaoUrl.searchParams.set("y", y);
-  kakaoUrl.searchParams.set("radius", "2000");
-  kakaoUrl.searchParams.set("sort", "distance");
-  kakaoUrl.searchParams.set("page", page);
-  kakaoUrl.searchParams.set("size", "5");
-
-  const res = await fetch(kakaoUrl, {
-    headers: {
-      Authorization: `KakaoAK ${key}`,
-    },
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
+  const page = Number(pageRaw);
+  if (!Number.isInteger(page) || page < 1 || page > 45) {
     return Response.json(
-      { error: "Kakao Local API error", status: res.status, body: text },
-      { status: 502 },
+      { error: "Invalid page (1–45)" },
+      { status: 400 },
     );
   }
 
-  const data = (await res.json()) as KakaoCategorySearchResponse;
-  const restaurants: NearbyRestaurant[] = data.documents.map((d) => ({
-    id: d.id,
-    name: d.place_name,
-    categoryName: d.category_name,
-    phone: d.phone,
-    addressName: d.address_name,
-    roadAddressName: d.road_address_name,
-    x: toNumber(d.x, "x"),
-    y: toNumber(d.y, "y"),
-    placeUrl: d.place_url,
-    distanceMeters: d.distance ? toNumber(d.distance, "distance") : undefined,
-  }));
+  const radius = radiusRaw != null ? Number(radiusRaw) : 2000;
+  if (!Number.isFinite(radius) || radius < 1 || radius > 20_000) {
+    return Response.json(
+      { error: "Invalid radius (1–20000 meters)" },
+      { status: 400 },
+    );
+  }
 
-  return Response.json({
-    page: Number(page),
-    isEnd: data.meta.is_end,
-    restaurants,
-  });
+  const size = 15;
+  const kakaoUrl = new URL(
+    "https://dapi.kakao.com/v2/local/search/category.json",
+  );
+  kakaoUrl.searchParams.set("category_group_code", KAKAO_RESTAURANT_CATEGORY);
+  kakaoUrl.searchParams.set("x", x);
+  kakaoUrl.searchParams.set("y", y);
+  kakaoUrl.searchParams.set("radius", String(Math.round(radius)));
+  kakaoUrl.searchParams.set("sort", "distance");
+  kakaoUrl.searchParams.set("page", String(page));
+  kakaoUrl.searchParams.set("size", String(size));
+
+  try {
+    const res = await fetch(kakaoUrl, {
+      headers: {
+        Authorization: `KakaoAK ${key}`,
+      },
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      return Response.json(
+        { error: "Kakao Local API error", status: res.status, body: text },
+        { status: 502 },
+      );
+    }
+
+    const data = (await res.json()) as KakaoCategorySearchResponse;
+    const restaurants: NearbyRestaurant[] = data.documents.map((d) => ({
+      id: d.id,
+      name: d.place_name,
+      categoryName: d.category_name,
+      categoryGroupCode: d.category_group_code,
+      categoryGroupName: d.category_group_name,
+      phone: d.phone,
+      addressName: d.address_name,
+      roadAddressName: d.road_address_name,
+      x: toNumber(d.x, "x"),
+      y: toNumber(d.y, "y"),
+      placeUrl: d.place_url,
+      distanceMeters: d.distance ? toNumber(d.distance, "distance") : undefined,
+    }));
+
+    return Response.json({
+      page,
+      isEnd: data.meta.is_end,
+      restaurants,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return Response.json(
+      { error: "Kakao Local API error", detail: message },
+      { status: 502 },
+    );
+  }
 }
-

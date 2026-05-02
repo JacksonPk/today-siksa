@@ -4,6 +4,8 @@ export type GetNearbyRestaurantsParams = {
   x: number; // longitude
   y: number; // latitude
   page?: number; // 1..45
+  /** 반경(미터). 카카오 로컬 API: 1–20000 */
+  radiusMeters?: number;
 };
 
 export type GetNearbyRestaurantsResult = {
@@ -19,6 +21,9 @@ export async function getNearbyRestaurants(
   url.searchParams.set("x", String(params.x));
   url.searchParams.set("y", String(params.y));
   url.searchParams.set("page", String(params.page ?? 1));
+  if (params.radiusMeters != null) {
+    url.searchParams.set("radius", String(Math.round(params.radiusMeters)));
+  }
 
   const res = await fetch(url, { method: "GET" });
   if (!res.ok) {
@@ -63,4 +68,3 @@ export function openKakaoMapWalkingRoute({ start, end }: OpenWalkingRouteParams)
     }
   }, 1100);
 }
-
